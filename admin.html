@@ -1,0 +1,1336 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>單品進銷存管理後台</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <style>
+    [v-cloak] { display: none; }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-800 font-sans antialiased">
+
+<div id="app" v-cloak class="min-h-screen flex flex-col">
+
+  <!-- ==================== 登入驗證閘門 ==================== -->
+  <div v-if="!isAuthenticated" class="min-h-screen bg-slate-900 flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-md w-full p-7 shadow-2xl space-y-5">
+      <div class="text-center space-y-1.5">
+        <div class="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-indigo-600 text-white font-bold text-lg shadow-md mb-1">
+          IMS
+        </div>
+        <h1 class="text-xl font-bold text-slate-800">進銷存管理後台登入</h1>
+        <p class="text-xs text-slate-500">請輸入與資料庫一致的管理密碼以驗證身分並載入資料</p>
+      </div>
+
+      <form @submit.prevent="handleLogin" class="space-y-4 text-sm">
+        <div>
+          <div class="flex items-center justify-between mb-1">
+            <label class="text-xs font-medium text-slate-600">資料庫 API 網址 (Web App URL)</label>
+            <button v-if="hasSavedEndpoint" type="button" @click="showEndpointInput = !showEndpointInput" 
+                    class="text-xs text-indigo-600 hover:underline">
+              {{ showEndpointInput ? '收合網址' : '變更網址' }}
+            </button>
+          </div>
+          <input v-if="showEndpointInput || !hasSavedEndpoint" 
+                 v-model="apiConfig.endpoint" type="url" required 
+                 placeholder="https://script.google.com/macros/s/..." 
+                 class="w-full border border-slate-300 rounded-lg px-3 py-2 font-mono text-xs focus:outline-none focus:border-indigo-500">
+          <div v-else class="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-2 rounded-lg flex items-center justify-between">
+            <span>✓ 已綁定雲端資料庫端點</span>
+            <span class="font-mono text-[11px] text-emerald-600">HTTPS</span>
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs font-medium text-slate-600 mb-1">管理介面密碼 *</label>
+          <div class="relative">
+            <input v-model="loginPasswordInput" :type="showPassword ? 'text' : 'password'" required autofocus
+                   placeholder="請輸入管理密碼" 
+                   class="w-full border border-slate-300 rounded-lg px-3.5 py-2.5 pr-14 text-base tracking-wider focus:outline-none focus:border-indigo-500">
+            <button type="button" @click="showPassword = !showPassword" 
+                    class="absolute right-3 top-3 text-xs text-slate-400 hover:text-slate-700">
+              {{ showPassword ? '隱藏' : '顯示' }}
+            </button>
+          </div>
+        </div>
+
+        <div v-if="loginError" class="bg-rose-50 border border-rose-200 text-rose-700 text-xs p-3 rounded-lg">
+          ⚠️ {{ loginError }}
+        </div>
+
+        <button type="submit" :disabled="isLoggingIn" 
+                class="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 text-white font-bold py-2.5 rounded-lg shadow-sm transition cursor-pointer">
+          {{ isLoggingIn ? '驗證密碼與讀取資料庫中...' : '🔐 驗證密碼並進入後台' }}
+        </button>
+      </form>
+
+      <div class="pt-3 border-t border-slate-100 text-center">
+        <button type="button" @click="enterOfflineDemo" class="text-xs text-slate-400 hover:text-slate-600 transition">
+          尚未設定雲端網址？先以本地離線模式測試
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== 已驗證後台主介面 ==================== -->
+  <div v-else class="min-h-screen flex flex-col md:flex-row">
+    
+    <!-- 左側功能選單 -->
+    <aside class="w-full md:w-60 bg-slate-900 text-slate-300 flex flex-col shrink-0 shadow-xl z-30">
+      <div class="p-4 border-b border-slate-800 flex items-center justify-between">
+        <div class="flex items-center gap-2.5">
+          <span class="bg-indigo-500 text-white font-bold px-2 py-1 rounded text-xs tracking-wider">IMS</span>
+          <span class="text-white font-bold tracking-wide text-base">進銷存管理後台</span>
+        </div>
+        <button @click="mobileMenuOpen = !mobileMenuOpen" class="md:hidden text-slate-400 hover:text-white p-1">☰</button>
+      </div>
+
+      <nav :class="mobileMenuOpen ? 'block' : 'hidden md:block'" class="flex-1 p-3 space-y-1.5 text-sm">
+        <button @click="activeTab = 'inventory'; mobileMenuOpen = false"
+                :class="activeTab === 'inventory' ? 'bg-indigo-600 text-white font-medium shadow-sm' : 'hover:bg-slate-800 text-slate-300'"
+                class="w-full flex items-center justify-between px-3 py-2.5 rounded-lg transition">
+          <span class="flex items-center gap-2.5">📦 進銷存管理</span>
+          <span class="text-xs px-2 py-0.5 rounded-full" :class="activeTab === 'inventory' ? 'bg-indigo-500 text-white' : 'bg-slate-800 text-slate-400'">
+            {{ kpi.inStockCount }}
+          </span>
+        </button>
+
+        <button @click="activeTab = 'masterData'; mobileMenuOpen = false"
+                :class="activeTab === 'masterData' ? 'bg-indigo-600 text-white font-medium shadow-sm' : 'hover:bg-slate-800 text-slate-300'"
+                class="w-full flex items-center justify-between px-3 py-2.5 rounded-lg transition">
+          <span class="flex items-center gap-2.5">🗂️ 選單與品項庫設定</span>
+          <span class="text-xs px-2 py-0.5 rounded-full" :class="activeTab === 'masterData' ? 'bg-indigo-500 text-white' : 'bg-slate-800 text-slate-400'">
+            {{ masterData.catalog.length }}
+          </span>
+        </button>
+
+        <button @click="activeTab = 'syncBackup'; mobileMenuOpen = false"
+                :class="activeTab === 'syncBackup' ? 'bg-indigo-600 text-white font-medium shadow-sm' : 'hover:bg-slate-800 text-slate-300'"
+                class="w-full flex items-center justify-between px-3 py-2.5 rounded-lg transition">
+          <span>☁️ 匯出入與雲端同步</span>
+        </button>
+
+        <div class="pt-4 mt-4 border-t border-slate-800 md:hidden">
+          <button @click="logout" class="w-full text-left px-3 py-2 rounded-lg text-rose-400 hover:bg-slate-800">
+            🔒 登出並鎖定後台
+          </button>
+        </div>
+      </nav>
+
+      <div class="hidden md:block p-4 border-t border-slate-800 text-xs space-y-3">
+        <div class="flex items-center justify-between">
+          <span class="text-slate-500">雲端狀態</span>
+          <span :class="syncStatus.color" class="px-2 py-0.5 rounded-full font-medium">
+            {{ syncStatus.text }}
+          </span>
+        </div>
+        <div v-if="lastSyncTime" class="text-[11px] text-slate-500">
+          更新於：{{ lastSyncTime }}
+        </div>
+        <button @click="logout" class="w-full py-2 px-3 rounded-lg bg-slate-800 hover:bg-rose-950/60 text-slate-300 hover:text-rose-300 border border-slate-700 transition flex items-center justify-center gap-1.5 font-medium">
+          🔒 登出並鎖定
+        </button>
+      </div>
+    </aside>
+
+    <!-- 右側主工作區 -->
+    <div class="flex-1 flex flex-col min-w-0">
+      
+      <!-- ==================== 分頁 1：進銷存管理 ==================== -->
+      <main v-if="activeTab === 'inventory'" class="p-4 sm:p-6 space-y-5 max-w-[1500px] w-full mx-auto">
+        
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 class="text-xl font-bold text-slate-800">商品進銷存總覽</h2>
+            <p class="text-xs text-slate-500 mt-0.5">單品履歷追蹤・點擊「進貨日期」或「出貨日期」表頭可切換排序</p>
+          </div>
+          <div class="flex flex-wrap items-center gap-2 text-xs sm:text-sm">
+            <button @click="openAddModal" class="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg font-medium shadow-sm transition">
+              + 新增進貨
+            </button>
+            <button v-if="apiConfig.endpoint && apiConfig.token" @click="pullFromCloud(false)" :disabled="syncState === 'syncing'"
+                    class="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 px-3 py-2 rounded-lg font-medium transition">
+              ⬇️ 從雲端讀取
+            </button>
+            <button v-if="apiConfig.endpoint && apiConfig.token" @click="syncToCloud" :disabled="syncState === 'syncing'"
+                    class="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-2 rounded-lg font-medium transition">
+              ⬆️ 同步至雲端
+            </button>
+            <button @click="showImportModal = true" class="bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 px-3 py-2 rounded-lg transition">
+              📋 試算表貼上
+            </button>
+            <button @click="exportTSV" class="bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 px-3 py-2 rounded-lg transition">
+              📤 複製格式
+            </button>
+          </div>
+        </div>
+
+        <!-- KPI 數據卡片 -->
+        <section class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+          <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
+            <div class="text-xs text-slate-500 font-medium">在庫成本總計</div>
+            <div class="text-xl sm:text-2xl font-bold text-slate-800 mt-1">NT$ {{ formatNum(kpi.inStockCost) }}</div>
+            <div class="text-xs text-slate-400 mt-1">
+              在庫 <span class="font-bold text-indigo-600">{{ kpi.inStockCount }}</span> 件 / 預估標價 ${{ formatNum(kpi.inStockListValue) }}
+            </div>
+          </div>
+
+          <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
+            <div class="text-xs text-slate-500 font-medium">已售出總實收</div>
+            <div class="text-xl sm:text-2xl font-bold text-indigo-600 mt-1">NT$ {{ formatNum(kpi.totalReceived) }}</div>
+            <div class="text-xs text-slate-400 mt-1">
+              已售 <span class="font-bold text-slate-700">{{ kpi.soldCount }}</span> 件 / 總售價 ${{ formatNum(kpi.totalSoldPrice) }}
+            </div>
+          </div>
+
+          <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
+            <div class="text-xs text-slate-500 font-medium">已實現淨利 (實收 - 進價)</div>
+            <div class="text-xl sm:text-2xl font-bold text-emerald-600 mt-1">
+              NT$ {{ formatNum(kpi.realizedProfit) }}
+              <span class="text-xs font-normal text-emerald-500">({{ kpi.profitMargin }}%)</span>
+            </div>
+            <div class="text-xs text-slate-400 mt-1">已售商品成本 ${{ formatNum(kpi.soldCost) }}</div>
+          </div>
+
+          <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
+            <div class="text-xs text-slate-500 font-medium">整體損益平衡 (總實收 - 總進價)</div>
+            <div class="text-xl sm:text-2xl font-bold mt-1" :class="kpi.netCashFlow >= 0 ? 'text-emerald-600' : 'text-amber-600'">
+              {{ kpi.netCashFlow >= 0 ? '+' : '' }}NT$ {{ formatNum(kpi.netCashFlow) }}
+            </div>
+            <div class="text-xs text-slate-400 mt-1">總投入進貨成本 ${{ formatNum(kpi.totalCost) }}</div>
+          </div>
+        </section>
+
+        <!-- 多維度篩選、排序與搜尋 -->
+        <section class="bg-white p-3.5 rounded-xl shadow-sm border border-slate-200 flex flex-wrap items-center justify-between gap-3">
+          <div class="flex flex-wrap items-center gap-2">
+            <div class="inline-flex rounded-lg bg-slate-100 p-1 text-xs font-medium">
+              <button @click="filterStatus = 'ALL'" :class="filterStatus === 'ALL' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'" class="px-3 py-1.5 rounded-md transition">
+                全部 ({{ items.length }})
+              </button>
+              <button @click="filterStatus = 'IN_STOCK'" :class="filterStatus === 'IN_STOCK' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'" class="px-3 py-1.5 rounded-md transition">
+                在庫中 ({{ kpi.inStockCount }})
+              </button>
+              <button @click="filterStatus = 'SOLD'" :class="filterStatus === 'SOLD' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'" class="px-3 py-1.5 rounded-md transition">
+                已售出 ({{ kpi.soldCount }})
+              </button>
+            </div>
+
+            <select v-model="filterVersion" class="text-xs border border-slate-300 rounded-lg px-2.5 py-1.5 bg-white">
+              <option value="">所有版本</option>
+              <option v-for="v in allVersions" :key="v" :value="v">{{ v }}</option>
+            </select>
+
+            <select v-model="filterPart" class="text-xs border border-slate-300 rounded-lg px-2.5 py-1.5 bg-white">
+              <option value="">所有部位</option>
+              <option v-for="p in allParts" :key="p" :value="p">{{ p }}</option>
+            </select>
+
+            <select v-model="filterSource" class="text-xs border border-slate-300 rounded-lg px-2.5 py-1.5 bg-white">
+              <option value="">所有來源</option>
+              <option v-for="s in allSources" :key="s" :value="s">{{ s }}</option>
+            </select>
+
+            <!-- 日期排序快捷選單 -->
+            <select v-model="sortPreset" class="text-xs border border-indigo-200 bg-indigo-50/60 text-indigo-800 font-medium rounded-lg px-2.5 py-1.5">
+              <option value="">排序：預設順序</option>
+              <option value="purchaseDate:desc">進貨日期：新 → 舊</option>
+              <option value="purchaseDate:asc">進貨日期：舊 → 新</option>
+              <option value="shipDate:desc">出貨日期：新 → 舊</option>
+              <option value="shipDate:asc">出貨日期：舊 → 新</option>
+            </select>
+          </div>
+
+          <div class="w-full sm:w-auto">
+            <input v-model="searchQuery" type="text" placeholder="搜尋日期、系列、品項、來源、買家..." 
+                   class="w-full sm:w-64 text-sm border border-slate-300 rounded-lg px-3 py-1.5 focus:outline-none focus:border-indigo-500">
+          </div>
+        </section>
+
+        <!-- 主資料表 -->
+        <section class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+          <div class="overflow-x-auto">
+            <table class="w-full text-left border-collapse text-sm whitespace-nowrap">
+              <thead>
+                <tr class="bg-slate-800 text-slate-200 text-xs select-none">
+                  <th class="py-3 px-3">狀態</th>
+                  <th @click="toggleDateSort('purchaseDate')" title="點擊切換進貨日期排序"
+                      class="py-3 px-3 cursor-pointer hover:bg-slate-700 transition">
+                    <span class="inline-flex items-center gap-1">
+                      進貨日期
+                      <span v-if="sortField === 'purchaseDate'" class="text-amber-400 font-bold">
+                        {{ sortOrder === 'desc' ? '↓' : '↑' }}
+                      </span>
+                      <span v-else class="text-slate-500">↕</span>
+                    </span>
+                  </th>
+                  <th class="py-3 px-3">系列</th>
+                  <th class="py-3 px-3">品項</th>
+                  <th class="py-3 px-3">版本</th>
+                  <th class="py-3 px-3">部位</th>
+                  <th class="py-3 px-3">來源</th>
+                  <th class="py-3 px-3 text-right">進價</th>
+                  <th class="py-3 px-3 text-right border-r border-slate-700">標價</th>
+                  <th @click="toggleDateSort('shipDate')" title="點擊切換出貨日期排序"
+                      class="py-3 px-3 bg-slate-900/60 cursor-pointer hover:bg-slate-700 transition">
+                    <span class="inline-flex items-center gap-1">
+                      出貨日期
+                      <span v-if="sortField === 'shipDate'" class="text-amber-400 font-bold">
+                        {{ sortOrder === 'desc' ? '↓' : '↑' }}
+                      </span>
+                      <span v-else class="text-slate-500">↕</span>
+                    </span>
+                  </th>
+                  <th class="py-3 px-3 text-right bg-slate-900/60">售價</th>
+                  <th class="py-3 px-3 text-right bg-slate-900/60">實收</th>
+                  <th class="py-3 px-3 bg-slate-900/60">買家</th>
+                  <th class="py-3 px-3 text-right">單品淨利</th>
+                  <th class="py-3 px-3 text-center">操作</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100">
+                <tr v-for="item in filteredItems" :key="item.id" class="hover:bg-slate-50/90 transition">
+                  <td class="py-2.5 px-3">
+                    <span v-if="isSold(item)" class="bg-emerald-100 text-emerald-800 text-xs font-bold px-2 py-0.5 rounded-full">已售出</span>
+                    <span v-else class="bg-amber-100 text-amber-800 text-xs font-bold px-2 py-0.5 rounded-full">在庫中</span>
+                  </td>
+                  <td class="py-2.5 px-3 text-xs font-mono" :class="sortField === 'purchaseDate' ? 'text-indigo-700 font-bold' : 'text-slate-500'">
+                    {{ normalizeDate(item.purchaseDate) || '-' }}
+                  </td>
+                  <td class="py-2.5 px-3 font-mono font-bold text-indigo-600">{{ item.series }}</td>
+                  <td class="py-2.5 px-3 font-bold text-slate-800">{{ item.name }}</td>
+                  <td class="py-2.5 px-3">
+                    <span v-if="item.version" class="text-xs bg-slate-100 text-slate-700 border border-slate-200 px-2 py-0.5 rounded">{{ item.version }}</span>
+                  </td>
+                  <td class="py-2.5 px-3 text-xs text-slate-600">{{ item.part }}</td>
+                  <td class="py-2.5 px-3">
+                    <span v-if="item.source" class="text-xs bg-sky-50 text-sky-700 border border-sky-200 px-2 py-0.5 rounded">{{ item.source }}</span>
+                    <span v-else class="text-xs text-slate-300">-</span>
+                  </td>
+                  <td class="py-2.5 px-3 text-right font-mono text-slate-600">{{ formatNum(item.cost) }}</td>
+                  <td class="py-2.5 px-3 text-right font-mono font-medium text-slate-800 border-r border-slate-200">{{ formatNum(item.listPrice) }}</td>
+
+                  <td class="py-2.5 px-3 text-xs font-mono bg-indigo-50/20" :class="sortField === 'shipDate' ? 'text-indigo-700 font-bold' : 'text-slate-500'">
+                    {{ normalizeDate(item.shipDate) || '-' }}
+                  </td>
+                  <td class="py-2.5 px-3 text-right font-mono text-slate-700 bg-indigo-50/20">{{ item.soldPrice !== '' && item.soldPrice !== null ? formatNum(item.soldPrice) : '-' }}</td>
+                  <td class="py-2.5 px-3 text-right font-mono font-bold text-indigo-700 bg-indigo-50/20">{{ item.actualReceived !== '' && item.actualReceived !== null ? formatNum(item.actualReceived) : '-' }}</td>
+                  <td class="py-2.5 px-3 text-xs font-medium text-slate-700 bg-indigo-50/20">{{ item.buyer || '-' }}</td>
+
+                  <td class="py-2.5 px-3 text-right font-mono font-bold">
+                    <template v-if="isSold(item)">
+                      <span :class="calcProfit(item) >= 0 ? 'text-emerald-600' : 'text-rose-600'">
+                        {{ calcProfit(item) >= 0 ? '+' : '' }}{{ formatNum(calcProfit(item)) }}
+                      </span>
+                    </template>
+                    <span v-else class="text-slate-300">-</span>
+                  </td>
+
+                  <td class="py-2.5 px-3 text-center">
+                    <div class="inline-flex items-center gap-1.5">
+                      <button v-if="!isSold(item)" @click="openSellModal(item)" class="bg-indigo-600 hover:bg-indigo-500 text-white text-xs px-2.5 py-1 rounded font-medium transition">出貨</button>
+                      <button @click="openEditModal(item)" class="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-2 py-1 rounded transition">編輯</button>
+                      <button @click="deleteItem(item.id)" class="text-xs text-slate-400 hover:text-rose-600 px-1.5 py-1 transition" title="刪除">✕</button>
+                    </div>
+                  </td>
+                </tr>
+
+                <tr v-if="filteredItems.length === 0">
+                  <td colspan="15" class="py-10 text-center text-slate-400">目前沒有符合條件的商品資料</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+
+      <!-- ==================== 分頁 2：選單與品項庫設定 ==================== -->
+      <main v-if="activeTab === 'masterData'" class="p-4 sm:p-6 space-y-6 max-w-[1400px] w-full mx-auto">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 class="text-xl font-bold text-slate-800">選單與品項庫設定</h2>
+            <p class="text-xs text-slate-500 mt-0.5">維護「系列 ↔ 品項」雙向連動配對，以及版本、部位、來源下拉選項</p>
+          </div>
+          <button @click="exportConfigJSON" class="bg-slate-800 hover:bg-slate-700 text-white text-xs px-3.5 py-2 rounded-lg transition">
+            📥 匯出為 config.json
+          </button>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          <section class="lg:col-span-6 bg-white rounded-xl shadow-sm border border-slate-200 p-5 flex flex-col">
+            <div class="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
+              <div>
+                <h3 class="font-bold text-slate-800">🔗 系列與品項綁定庫</h3>
+                <p class="text-xs text-slate-400 mt-0.5">新增進貨時，輸入系列或品項其中一項，另一項自動帶入</p>
+              </div>
+              <span class="text-xs bg-indigo-50 text-indigo-700 font-bold px-2.5 py-1 rounded-full">共 {{ masterData.catalog.length }} 組</span>
+            </div>
+
+            <form @submit.prevent="addCatalogPair" class="flex gap-2 mb-4">
+              <input v-model="newPair.series" type="text" required placeholder="系列編號 (如 BX-35-04)" class="w-2/5 text-sm border border-slate-300 rounded-lg px-3 py-2 font-mono focus:outline-none focus:border-indigo-500">
+              <input v-model="newPair.name" type="text" required placeholder="對應品項 (如 魔導神杖)" class="flex-1 text-sm border border-slate-300 rounded-lg px-3 py-2 focus:outline-none focus:border-indigo-500">
+              <button type="submit" class="bg-indigo-600 hover:bg-indigo-500 text-white text-sm px-4 py-2 rounded-lg font-medium shrink-0">新增</button>
+            </form>
+
+            <input v-model="catalogSearch" type="text" placeholder="搜尋已建立的系列或品項..." class="w-full text-xs border border-slate-200 bg-slate-50 rounded-lg px-3 py-2 mb-3 focus:outline-none focus:bg-white focus:border-indigo-500">
+
+            <div class="overflow-y-auto max-h-[420px] border border-slate-200 rounded-lg divide-y divide-slate-100">
+              <div v-for="pair in filteredCatalog" :key="pair.series + pair.name" class="flex items-center justify-between px-3.5 py-2.5 hover:bg-slate-50 text-sm">
+                <div class="flex items-center gap-3">
+                  <span class="font-mono font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded text-xs min-w-[5.5rem] text-center">{{ pair.series }}</span>
+                  <span class="text-slate-400">↔</span>
+                  <span class="font-medium text-slate-800">{{ pair.name }}</span>
+                </div>
+                <button @click="removeCatalogPair(pair)" class="text-xs text-slate-400 hover:text-rose-600 px-2 py-1">刪除</button>
+              </div>
+              <div v-if="filteredCatalog.length === 0" class="py-8 text-center text-slate-400 text-xs">尚無符合的配對資料</div>
+            </div>
+          </section>
+
+          <div class="lg:col-span-6 space-y-5">
+            <section class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+              <h3 class="font-bold text-slate-800 mb-1">📍 進貨來源選單</h3>
+              <form @submit.prevent="addOption('sources', newOptionText.source)" class="flex gap-2 my-3">
+                <input v-model="newOptionText.source" type="text" required placeholder="輸入新來源名稱..." class="flex-1 text-sm border border-slate-300 rounded-lg px-3 py-1.5">
+                <button type="submit" class="bg-slate-800 hover:bg-slate-700 text-white text-xs px-4 py-1.5 rounded-lg font-medium">+ 新增</button>
+              </form>
+              <div class="flex flex-wrap gap-2">
+                <span v-for="(opt, idx) in masterData.sources" :key="opt" class="inline-flex items-center gap-1.5 bg-sky-50 text-sky-800 border border-sky-200 text-xs font-medium px-2.5 py-1 rounded-full">
+                  {{ opt }} <button @click="removeOption('sources', idx)" class="text-sky-400 hover:text-rose-600 font-bold">&times;</button>
+                </span>
+              </div>
+            </section>
+
+            <section class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+              <h3 class="font-bold text-slate-800 mb-1">🏷️ 版本選單</h3>
+              <form @submit.prevent="addOption('versions', newOptionText.version)" class="flex gap-2 my-3">
+                <input v-model="newOptionText.version" type="text" required placeholder="輸入新版本名稱..." class="flex-1 text-sm border border-slate-300 rounded-lg px-3 py-1.5">
+                <button type="submit" class="bg-slate-800 hover:bg-slate-700 text-white text-xs px-4 py-1.5 rounded-lg font-medium">+ 新增</button>
+              </form>
+              <div class="flex flex-wrap gap-2">
+                <span v-for="(opt, idx) in masterData.versions" :key="opt" class="inline-flex items-center gap-1.5 bg-slate-100 text-slate-700 border border-slate-200 text-xs font-medium px-2.5 py-1 rounded-full">
+                  {{ opt }} <button @click="removeOption('versions', idx)" class="text-slate-400 hover:text-rose-600 font-bold">&times;</button>
+                </span>
+              </div>
+            </section>
+
+            <section class="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+              <h3 class="font-bold text-slate-800 mb-1">⚙️ 部位 / 規格選單</h3>
+              <form @submit.prevent="addOption('parts', newOptionText.part)" class="flex gap-2 my-3">
+                <input v-model="newOptionText.part" type="text" required placeholder="輸入新部位名稱..." class="flex-1 text-sm border border-slate-300 rounded-lg px-3 py-1.5">
+                <button type="submit" class="bg-slate-800 hover:bg-slate-700 text-white text-xs px-4 py-1.5 rounded-lg font-medium">+ 新增</button>
+              </form>
+              <div class="flex flex-wrap gap-2">
+                <span v-for="(opt, idx) in masterData.parts" :key="opt" class="inline-flex items-center gap-1.5 bg-slate-100 text-slate-700 border border-slate-200 text-xs font-medium px-2.5 py-1 rounded-full">
+                  {{ opt }} <button @click="removeOption('parts', idx)" class="text-slate-400 hover:text-rose-600 font-bold">&times;</button>
+                </span>
+              </div>
+            </section>
+          </div>
+        </div>
+      </main>
+
+      <!-- ==================== 分頁 3：匯出入與雲端同步 ==================== -->
+      <main v-if="activeTab === 'syncBackup'" class="p-4 sm:p-6 space-y-6 max-w-3xl w-full mx-auto">
+        <div>
+          <h2 class="text-xl font-bold text-slate-800">匯出入與雲端同步</h2>
+          <p class="text-xs text-slate-500 mt-0.5">目前登入工作階段已通過密碼驗證（關閉分頁或點擊登出後將自動清除密碼）</p>
+        </div>
+
+        <section class="bg-white rounded-xl shadow-sm border border-slate-200 p-6 space-y-4 text-sm">
+          <div class="flex items-center justify-between border-b pb-2">
+            <h3 class="font-bold text-slate-800">🔐 Google Sheets 資料庫連線設定</h3>
+            <span :class="syncStatus.color" class="text-xs px-2.5 py-0.5 rounded-full font-medium">{{ syncStatus.text }}</span>
+          </div>
+
+          <div>
+            <label class="block text-slate-600 text-xs font-medium mb-1">Google Apps Script Web App URL</label>
+            <input v-model="apiConfig.endpoint" type="url" placeholder="https://script.google.com/macros/s/..." class="w-full border rounded-lg px-3 py-2 font-mono text-xs">
+          </div>
+
+          <div>
+            <label class="block text-slate-600 text-xs font-medium mb-1">目前工作階段密碼</label>
+            <div class="relative">
+              <input v-model="apiConfig.token" :type="showPassword ? 'text' : 'password'" class="w-full border rounded-lg px-3 py-2 pr-16">
+              <button type="button" @click="showPassword = !showPassword" class="absolute right-3 top-2 text-xs text-slate-500 hover:text-slate-800">
+                {{ showPassword ? '隱藏' : '顯示' }}
+              </button>
+            </div>
+          </div>
+
+          <div v-if="syncErrorMsg" class="bg-rose-50 border border-rose-200 text-rose-700 text-xs p-3 rounded-lg">
+            ⚠️ {{ syncErrorMsg }}
+          </div>
+
+          <div class="flex flex-wrap gap-3 pt-1">
+            <button @click="pullFromCloud(false)" :disabled="syncState === 'syncing'" class="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white px-4 py-2 rounded-lg font-medium transition">
+              ⬇️ 從雲端重新讀取
+            </button>
+            <button @click="syncToCloud" :disabled="syncState === 'syncing'" class="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white px-4 py-2 rounded-lg font-medium transition">
+              ⬆️ 推送更新至雲端
+            </button>
+          </div>
+        </section>
+
+        <section class="bg-white rounded-xl shadow-sm border border-slate-200 p-6 space-y-4 text-sm">
+          <h3 class="font-bold text-slate-800 border-b pb-2">💾 本地完整備份與還原</h3>
+          <div class="flex flex-wrap gap-3">
+            <button @click="exportFullJSON" class="bg-slate-800 hover:bg-slate-700 text-white px-4 py-2 rounded-lg">
+              下載完整 JSON 備份
+            </button>
+            <label class="bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 px-4 py-2 rounded-lg cursor-pointer">
+              📂 還原 JSON 備份檔
+              <input type="file" accept=".json" @change="importFullJSON" class="hidden">
+            </label>
+          </div>
+          <div class="pt-4 border-t flex justify-between items-center">
+            <span class="text-xs text-slate-400">清除目前瀏覽器資料並載入初始範例</span>
+            <button @click="resetDemo" class="text-xs text-rose-600 hover:underline">重置為預設範例</button>
+          </div>
+        </section>
+      </main>
+
+    </div>
+  </div>
+
+  <!-- ==================== Modal 1: 新增 / 編輯進銷存 ==================== -->
+  <div v-if="formModal.show" class="fixed inset-0 bg-slate-900/60 flex items-center justify-center z-50 p-4 overflow-y-auto">
+    <div class="bg-white rounded-xl max-w-2xl w-full p-6 shadow-xl my-8">
+      <div class="flex justify-between items-center border-b pb-3 mb-4">
+        <h3 class="text-lg font-bold text-slate-800">{{ formModal.isEdit ? '✏️ 編輯商品進銷存資料' : '📥 新增進貨商品' }}</h3>
+        <button @click="formModal.show = false" class="text-slate-400 hover:text-slate-600 text-xl">&times;</button>
+      </div>
+
+      <form @submit.prevent="saveForm" class="space-y-4 text-sm">
+        <div class="bg-slate-50 p-4 rounded-lg border border-slate-200 space-y-3">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-bold text-slate-500 uppercase tracking-wider">一、進貨與商品資訊</span>
+            <span class="text-[11px] text-indigo-600 font-medium">💡 系列與品項已啟用雙向自動連動</span>
+          </div>
+          
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div>
+              <label class="block text-slate-600 text-xs mb-1">進貨日期 (YYYY/MM/DD)</label>
+              <input v-model="formModal.data.purchaseDate" @blur="formModal.data.purchaseDate = normalizeDate(formModal.data.purchaseDate)" type="text" placeholder="2026/11/26" class="w-full border rounded-lg px-3 py-1.5 bg-white font-mono">
+            </div>
+            <div>
+              <label class="block text-slate-600 text-xs mb-1">系列 *</label>
+              <input v-model="formModal.data.series" @input="onSeriesInput" list="catalog-series-list" type="text" required placeholder="如 BX-35-04" class="w-full border rounded-lg px-3 py-1.5 bg-white font-mono font-bold text-indigo-700">
+              <datalist id="catalog-series-list">
+                <option v-for="c in masterData.catalog" :key="c.series" :value="c.series">{{ c.name }}</option>
+              </datalist>
+            </div>
+            <div>
+              <label class="block text-slate-600 text-xs mb-1">品項 *</label>
+              <input v-model="formModal.data.name" @input="onNameInput" list="catalog-name-list" type="text" required placeholder="如 魔導神杖" class="w-full border rounded-lg px-3 py-1.5 bg-white font-bold">
+              <datalist id="catalog-name-list">
+                <option v-for="c in masterData.catalog" :key="c.name" :value="c.name">{{ c.series }}</option>
+              </datalist>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 sm:grid-cols-5 gap-3">
+            <div>
+              <label class="block text-slate-600 text-xs mb-1">版本</label>
+              <select v-model="formModal.data.version" class="w-full border rounded-lg px-2.5 py-1.5 bg-white">
+                <option value="">請選擇</option>
+                <option v-for="v in masterData.versions" :key="v" :value="v">{{ v }}</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-slate-600 text-xs mb-1">部位</label>
+              <select v-model="formModal.data.part" class="w-full border rounded-lg px-2.5 py-1.5 bg-white">
+                <option value="">請選擇</option>
+                <option v-for="p in masterData.parts" :key="p" :value="p">{{ p }}</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-slate-600 text-xs mb-1">來源</label>
+              <select v-model="formModal.data.source" class="w-full border rounded-lg px-2.5 py-1.5 bg-white">
+                <option value="">請選擇</option>
+                <option v-for="s in masterData.sources" :key="s" :value="s">{{ s }}</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-slate-600 text-xs mb-1">進價 *</label>
+              <input v-model.number="formModal.data.cost" type="number" min="0" required class="w-full border rounded-lg px-3 py-1.5 bg-white">
+            </div>
+            <div>
+              <label class="block text-slate-600 text-xs mb-1">標價 *</label>
+              <input v-model.number="formModal.data.listPrice" type="number" min="0" required class="w-full border rounded-lg px-3 py-1.5 bg-white">
+            </div>
+          </div>
+        </div>
+
+        <div class="bg-indigo-50/40 p-4 rounded-lg border border-indigo-100 space-y-3">
+          <div class="flex justify-between items-center">
+            <span class="text-xs font-bold text-indigo-700 uppercase tracking-wider">二、出貨與結帳資訊（在庫中請留空）</span>
+            <button v-if="formModal.data.shipDate || formModal.data.buyer" type="button" @click="clearShipInfo" class="text-xs text-rose-600 hover:underline">清空出貨資訊</button>
+          </div>
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div>
+              <label class="block text-slate-600 text-xs mb-1">出貨日期 (YYYY/MM/DD)</label>
+              <input v-model="formModal.data.shipDate" @blur="formModal.data.shipDate = normalizeDate(formModal.data.shipDate)" type="text" placeholder="2026/11/26" class="w-full border rounded-lg px-3 py-1.5 bg-white font-mono">
+            </div>
+            <div>
+              <label class="block text-slate-600 text-xs mb-1">售價</label>
+              <input v-model.number="formModal.data.soldPrice" @input="syncReceivedIfEmpty" type="number" min="0" class="w-full border rounded-lg px-3 py-1.5 bg-white">
+            </div>
+            <div>
+              <label class="block text-slate-600 text-xs mb-1">實收</label>
+              <input v-model.number="formModal.data.actualReceived" type="number" min="0" class="w-full border rounded-lg px-3 py-1.5 bg-white">
+            </div>
+            <div>
+              <label class="block text-slate-600 text-xs mb-1">買家</label>
+              <input v-model="formModal.data.buyer" type="text" placeholder="例：7-11 昌緒" class="w-full border rounded-lg px-3 py-1.5 bg-white">
+            </div>
+          </div>
+        </div>
+
+        <div class="flex justify-end gap-2 pt-2">
+          <button type="button" @click="formModal.show = false" class="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg">取消</button>
+          <button type="submit" class="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-medium">儲存資料</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ==================== Modal 2: 快速出貨視窗 ==================== -->
+  <div v-if="sellModal.show" class="fixed inset-0 bg-slate-900/60 flex items-center justify-center z-50 p-4">
+    <div class="bg-white rounded-xl max-w-md w-full p-6 shadow-xl space-y-4 text-sm">
+      <h3 class="text-lg font-bold text-slate-800">🚚 快速登記出貨</h3>
+      <div class="bg-slate-50 p-3 rounded-lg border border-slate-200">
+        <div class="font-bold text-indigo-600">{{ sellModal.item.series }} {{ sellModal.item.name }}</div>
+        <div class="text-xs text-slate-500 mt-0.5">
+          {{ sellModal.item.version }} · {{ sellModal.item.part }} · {{ sellModal.item.source || '無來源' }} ｜ 進價: ${{ sellModal.item.cost }} / 標價: ${{ sellModal.item.listPrice }}
+        </div>
+      </div>
+
+      <form @submit.prevent="submitQuickSell" class="space-y-3">
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-slate-600 text-xs mb-1">出貨日期 (YYYY/MM/DD) *</label>
+            <input v-model="sellModal.shipDate" @blur="sellModal.shipDate = normalizeDate(sellModal.shipDate)" type="text" required class="w-full border rounded-lg px-3 py-2 font-mono">
+          </div>
+          <div>
+            <label class="block text-slate-600 text-xs mb-1">買家 / 門市 *</label>
+            <input v-model="sellModal.buyer" type="text" required placeholder="例：7-11 昌緒" class="w-full border rounded-lg px-3 py-2">
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-slate-600 text-xs mb-1">售價 *</label>
+            <input v-model.number="sellModal.soldPrice" @input="sellModal.actualReceived = sellModal.soldPrice" type="number" min="0" required class="w-full border rounded-lg px-3 py-2">
+          </div>
+          <div>
+            <label class="block text-slate-600 text-xs mb-1">實收 (可扣手續費) *</label>
+            <input v-model.number="sellModal.actualReceived" type="number" min="0" required class="w-full border rounded-lg px-3 py-2">
+          </div>
+        </div>
+
+        <div class="bg-emerald-50 text-emerald-800 px-3 py-2 rounded-lg flex justify-between items-center text-xs font-bold">
+          <span>預估單品淨利：</span>
+          <span class="text-base">+NT$ {{ formatNum((sellModal.actualReceived || 0) - sellModal.item.cost) }}</span>
+        </div>
+
+        <div class="flex justify-end gap-2 pt-2">
+          <button type="button" @click="sellModal.show = false" class="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg">取消</button>
+          <button type="submit" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-medium">確認出貨</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ==================== Modal 3: 試算表貼上匯入 ==================== -->
+  <div v-if="showImportModal" class="fixed inset-0 bg-slate-900/60 flex items-center justify-center z-50 p-4">
+    <div class="bg-white rounded-xl max-w-2xl w-full p-6 shadow-xl space-y-4 text-sm">
+      <h3 class="text-lg font-bold">📋 從 Excel / Google 試算表貼上匯入</h3>
+      <textarea v-model="pasteRawText" rows="7" placeholder="直接在此貼上試算表複製的內容..." class="w-full border border-slate-300 rounded-lg p-3 font-mono text-xs focus:outline-none focus:border-indigo-500"></textarea>
+      <div class="flex justify-end gap-2">
+        <button @click="showImportModal = false" class="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg">取消</button>
+        <button @click="parseAndImportTSV" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-medium">解析並匯入</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const { createApp, ref, computed, watch, onMounted } = Vue;
+
+createApp({
+  setup() {
+    const isAuthenticated = ref(false);
+    const loginPasswordInput = ref('');
+    const isLoggingIn = ref(false);
+    const loginError = ref('');
+    const showEndpointInput = ref(false);
+
+    const activeTab = ref('inventory');
+    const mobileMenuOpen = ref(false);
+    const showPassword = ref(false);
+
+    const masterData = ref({
+      catalog: [
+        { series: 'UX-19', name: '彈丸獅鷲 H' },
+        { series: 'BX-35-04', name: '魔導神杖' }
+      ],
+      versions: ['日版', '港版', '代理版', '台版', '韓版'],
+      parts: ['全新盒', '整組無盒', '戰輪', '固定軸', '軸心', '發射器', 'QR碼/簽紙'],
+      sources: ['抽抽樂', '夾娃娃機', '門市購買', '批發進貨', '網拍收購', '拆盒自留']
+    });
+
+    const items = ref([]);
+    const searchQuery = ref('');
+    const filterStatus = ref('ALL');
+    const filterVersion = ref('');
+    const filterPart = ref('');
+    const filterSource = ref('');
+
+    // 日期排序狀態
+    const sortField = ref(''); // '' | 'purchaseDate' | 'shipDate'
+    const sortOrder = ref('desc'); // 'desc' | 'asc'
+
+    const sortPreset = computed({
+      get() {
+        return sortField.value ? `${sortField.value}:${sortOrder.value}` : '';
+      },
+      set(val) {
+        if (!val) {
+          sortField.value = '';
+          sortOrder.value = 'desc';
+        } else {
+          const [field, order] = val.split(':');
+          sortField.value = field;
+          sortOrder.value = order;
+        }
+      }
+    });
+
+    const toggleDateSort = (field) => {
+      if (sortField.value !== field) {
+        sortField.value = field;
+        sortOrder.value = 'desc';
+      } else if (sortOrder.value === 'desc') {
+        sortOrder.value = 'asc';
+      } else {
+        sortField.value = '';
+        sortOrder.value = 'desc';
+      }
+    };
+
+    const newPair = ref({ series: '', name: '' });
+    const catalogSearch = ref('');
+    const newOptionText = ref({ source: '', version: '', part: '' });
+
+    const showImportModal = ref(false);
+    const pasteRawText = ref('');
+    const syncState = ref('local');
+    const syncErrorMsg = ref('');
+    const lastSyncTime = ref(localStorage.getItem('bey_ims_last_sync') || '');
+
+    const apiConfig = ref({
+      endpoint: localStorage.getItem('bey_ims_endpoint') || '',
+      token: sessionStorage.getItem('bey_ims_session_token') || ''
+    });
+
+    const hasSavedEndpoint = computed(() => Boolean(apiConfig.value.endpoint && apiConfig.value.endpoint.trim() !== ''));
+
+    const formModal = ref({ show: false, isEdit: false, data: {} });
+    const sellModal = ref({ show: false, item: null, shipDate: '', soldPrice: 0, actualReceived: 0, buyer: '' });
+
+    const getTodayStr = () => {
+      const d = new Date();
+      return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`;
+    };
+
+    const normalizeDate = (val) => {
+      if (!val) return '';
+      const str = String(val).trim();
+      const match = str.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+      if (match) {
+        return `${match[1]}/${match[2].padStart(2, '0')}/${match[3].padStart(2, '0')}`;
+      }
+      if (str.includes('GMT') || /^[A-Za-z]{3}\s+[A-Za-z]{3}\s+\d{1,2}\s+\d{4}/.test(str)) {
+        const parsed = new Date(str);
+        if (!isNaN(parsed.getTime())) {
+          return `${parsed.getFullYear()}/${String(parsed.getMonth() + 1).padStart(2, '0')}/${String(parsed.getDate()).padStart(2, '0')}`;
+        }
+      }
+      return str;
+    };
+
+    const cleanItemsList = (list) => {
+      if (!Array.isArray(list)) return [];
+      return list.map(i => ({
+        ...i,
+        purchaseDate: normalizeDate(i.purchaseDate),
+        shipDate: normalizeDate(i.shipDate)
+      }));
+    };
+
+    const initDefaultItems = () => {
+      items.value = [
+        {
+          id: 'ITEM-001',
+          purchaseDate: '2026/11/20',
+          series: 'UX-19',
+          name: '彈丸獅鷲 H',
+          version: '港版',
+          part: '全新盒',
+          source: '網拍收購',
+          cost: 200,
+          listPrice: 1000,
+          shipDate: '2026/11/23',
+          soldPrice: 850,
+          actualReceived: 850,
+          buyer: '7-11 昌緒'
+        }
+      ];
+    };
+
+    const loadLocalCache = () => {
+      const savedMaster = localStorage.getItem('bey_ims_master_data');
+      if (savedMaster) masterData.value = { ...masterData.value, ...JSON.parse(savedMaster) };
+
+      const savedItems = localStorage.getItem('bey_ims_items');
+      if (savedItems) {
+        items.value = cleanItemsList(JSON.parse(savedItems));
+      } else {
+        initDefaultItems();
+      }
+    };
+
+    onMounted(async () => {
+      localStorage.removeItem('bey_ims_token');
+      try {
+        const res = await fetch('./config.json');
+        if (res.ok) {
+          const ext = await res.json();
+          masterData.value = { ...masterData.value, ...ext };
+        }
+      } catch (e) {}
+
+      if (apiConfig.value.endpoint && apiConfig.value.token) {
+        loadLocalCache();
+        isAuthenticated.value = true;
+        pullFromCloud(true);
+      } else if (sessionStorage.getItem('bey_ims_offline_mode') === '1') {
+        loadLocalCache();
+        isAuthenticated.value = true;
+      }
+    });
+
+    watch(items, (val) => localStorage.setItem('bey_ims_items', JSON.stringify(val)), { deep: true });
+    watch(masterData, (val) => localStorage.setItem('bey_ims_master_data', JSON.stringify(val)), { deep: true });
+    watch(() => apiConfig.value.endpoint, (val) => localStorage.setItem('bey_ims_endpoint', val));
+    watch(() => apiConfig.value.token, (val) => {
+      if (val) sessionStorage.setItem('bey_ims_session_token', val);
+      else sessionStorage.removeItem('bey_ims_session_token');
+    });
+
+    const handleLogin = async () => {
+      loginError.value = '';
+      const url = (apiConfig.value.endpoint || '').trim();
+      const pwd = (loginPasswordInput.value || '').trim();
+
+      if (!url) {
+        loginError.value = '請輸入 Google Apps Script Web App URL';
+        showEndpointInput.value = true;
+        return;
+      }
+      if (!pwd) {
+        loginError.value = '請輸入管理介面密碼';
+        return;
+      }
+
+      isLoggingIn.value = true;
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({ token: pwd, action: 'PULL_ALL' })
+        });
+        const data = await res.json();
+
+        if (!data.ok) {
+          loginError.value = data.error || '密碼錯誤，無法存取資料庫';
+          isLoggingIn.value = false;
+          return;
+        }
+
+        apiConfig.value.endpoint = url;
+        apiConfig.value.token = pwd;
+        sessionStorage.setItem('bey_ims_session_token', pwd);
+        sessionStorage.removeItem('bey_ims_offline_mode');
+
+        if (Array.isArray(data.items)) items.value = cleanItemsList(data.items);
+        if (data.masterData) {
+          masterData.value = {
+            catalog: data.masterData.catalog?.length ? data.masterData.catalog : masterData.value.catalog,
+            versions: data.masterData.versions?.length ? data.masterData.versions : masterData.value.versions,
+            parts: data.masterData.parts?.length ? data.masterData.parts : masterData.value.parts,
+            sources: data.masterData.sources?.length ? data.masterData.sources : masterData.value.sources
+          };
+        }
+
+        syncState.value = 'synced';
+        lastSyncTime.value = data.serverTime || `${getTodayStr()} 登入同步`;
+        localStorage.setItem('bey_ims_last_sync', lastSyncTime.value);
+
+        loginPasswordInput.value = '';
+        isAuthenticated.value = true;
+      } catch (err) {
+        loginError.value = '無法連線至資料庫，請確認 Web App URL 是否正確';
+        showEndpointInput.value = true;
+      } finally {
+        isLoggingIn.value = false;
+      }
+    };
+
+    const enterOfflineDemo = () => {
+      loadLocalCache();
+      sessionStorage.setItem('bey_ims_offline_mode', '1');
+      isAuthenticated.value = true;
+    };
+
+    const logout = () => {
+      apiConfig.value.token = '';
+      loginPasswordInput.value = '';
+      sessionStorage.removeItem('bey_ims_session_token');
+      sessionStorage.removeItem('bey_ims_offline_mode');
+      isAuthenticated.value = false;
+    };
+
+    const ensureAuthReady = () => {
+      if (!apiConfig.value.endpoint || !apiConfig.value.token) {
+        activeTab.value = 'syncBackup';
+        syncErrorMsg.value = '請確認資料庫網址與管理密碼皆已填寫';
+        return false;
+      }
+      return true;
+    };
+
+    const pullFromCloud = async (silent = false) => {
+      if (!ensureAuthReady()) return;
+      syncState.value = 'syncing';
+      syncErrorMsg.value = '';
+      try {
+        const res = await fetch(apiConfig.value.endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({ token: apiConfig.value.token, action: 'PULL_ALL' })
+        });
+        const data = await res.json();
+        if (!data.ok) {
+          syncState.value = 'error';
+          syncErrorMsg.value = data.error || '讀取失敗';
+          if (!silent) alert(syncErrorMsg.value);
+          return;
+        }
+        if (Array.isArray(data.items)) items.value = cleanItemsList(data.items);
+        if (data.masterData) {
+          masterData.value = {
+            catalog: data.masterData.catalog?.length ? data.masterData.catalog : masterData.value.catalog,
+            versions: data.masterData.versions?.length ? data.masterData.versions : masterData.value.versions,
+            parts: data.masterData.parts?.length ? data.masterData.parts : masterData.value.parts,
+            sources: data.masterData.sources?.length ? data.masterData.sources : masterData.value.sources
+          };
+        }
+        syncState.value = 'synced';
+        lastSyncTime.value = data.serverTime || `${getTodayStr()} 同步完成`;
+        localStorage.setItem('bey_ims_last_sync', lastSyncTime.value);
+        if (!silent) alert('已從 Google 試算表載入最新資料！');
+      } catch (err) {
+        syncState.value = 'error';
+        syncErrorMsg.value = '網路連線異常或網址錯誤';
+        if (!silent) alert(syncErrorMsg.value);
+      }
+    };
+
+    const syncToCloud = async () => {
+      if (!ensureAuthReady()) return;
+      syncState.value = 'syncing';
+      syncErrorMsg.value = '';
+      try {
+        items.value = cleanItemsList(items.value);
+        const res = await fetch(apiConfig.value.endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({
+            token: apiConfig.value.token,
+            action: 'SYNC_ALL',
+            items: items.value,
+            masterData: masterData.value
+          })
+        });
+        const data = await res.json();
+        if (!data.ok) {
+          syncState.value = 'error';
+          syncErrorMsg.value = data.error || '同步失敗';
+          alert(syncErrorMsg.value);
+          return;
+        }
+        syncState.value = 'synced';
+        lastSyncTime.value = data.serverTime || `${getTodayStr()} 同步完成`;
+        localStorage.setItem('bey_ims_last_sync', lastSyncTime.value);
+        alert('資料已同步更新至 Google 試算表！');
+      } catch (err) {
+        syncState.value = 'error';
+        syncErrorMsg.value = '網路連線異常或網址錯誤';
+        alert(syncErrorMsg.value);
+      }
+    };
+
+    const onSeriesInput = () => {
+      const s = (formModal.value.data.series || '').trim();
+      const match = masterData.value.catalog.find(c => c.series.toLowerCase() === s.toLowerCase());
+      if (match) {
+        formModal.value.data.series = match.series;
+        formModal.value.data.name = match.name;
+      }
+    };
+
+    const onNameInput = () => {
+      const n = (formModal.value.data.name || '').trim();
+      const match = masterData.value.catalog.find(c => c.name.toLowerCase() === n.toLowerCase());
+      if (match) {
+        formModal.value.data.series = match.series;
+        formModal.value.data.name = match.name;
+      }
+    };
+
+    const addCatalogPair = () => {
+      const s = newPair.value.series.trim();
+      const n = newPair.value.name.trim();
+      if (!s || !n) return;
+      const existsIdx = masterData.value.catalog.findIndex(c => c.series.toLowerCase() === s.toLowerCase());
+      if (existsIdx !== -1) masterData.value.catalog[existsIdx].name = n;
+      else masterData.value.catalog.unshift({ series: s, name: n });
+      newPair.value = { series: '', name: '' };
+    };
+
+    const removeCatalogPair = (pair) => {
+      masterData.value.catalog = masterData.value.catalog.filter(c => !(c.series === pair.series && c.name === pair.name));
+    };
+
+    const filteredCatalog = computed(() => {
+      const q = catalogSearch.value.toLowerCase().trim();
+      if (!q) return masterData.value.catalog;
+      return masterData.value.catalog.filter(c => c.series.toLowerCase().includes(q) || c.name.toLowerCase().includes(q));
+    });
+
+    const addOption = (field, text) => {
+      const val = (text || '').trim();
+      if (!val) return;
+      if (!masterData.value[field].includes(val)) masterData.value[field].push(val);
+      if (field === 'sources') newOptionText.value.source = '';
+      if (field === 'versions') newOptionText.value.version = '';
+      if (field === 'parts') newOptionText.value.part = '';
+    };
+
+    const removeOption = (field, idx) => masterData.value[field].splice(idx, 1);
+
+    const isSold = (item) => Boolean((item.shipDate && item.shipDate.trim() !== '') || (item.actualReceived !== '' && item.actualReceived !== null));
+    const calcProfit = (item) => isSold(item) ? ((Number(item.actualReceived) || 0) - (Number(item.cost) || 0)) : 0;
+
+    const kpi = computed(() => {
+      let inStockCost = 0, inStockCount = 0, inStockListValue = 0;
+      let totalReceived = 0, totalSoldPrice = 0, soldCount = 0, soldCost = 0, totalCost = 0;
+
+      items.value.forEach(item => {
+        const cost = Number(item.cost) || 0;
+        totalCost += cost;
+        if (isSold(item)) {
+          soldCount++;
+          soldCost += cost;
+          totalSoldPrice += Number(item.soldPrice) || 0;
+          totalReceived += Number(item.actualReceived) || 0;
+        } else {
+          inStockCount++;
+          inStockCost += cost;
+          inStockListValue += Number(item.listPrice) || 0;
+        }
+      });
+
+      const realizedProfit = totalReceived - soldCost;
+      const profitMargin = totalReceived > 0 ? ((realizedProfit / totalReceived) * 100).toFixed(1) : '0.0';
+      return {
+        inStockCost, inStockCount, inStockListValue,
+        totalReceived, totalSoldPrice, soldCount, soldCost,
+        realizedProfit, profitMargin, totalCost, netCashFlow: totalReceived - totalCost
+      };
+    });
+
+    const allVersions = computed(() => [...new Set([...masterData.value.versions, ...items.value.map(i => i.version).filter(Boolean)])]);
+    const allParts = computed(() => [...new Set([...masterData.value.parts, ...items.value.map(i => i.part).filter(Boolean)])]);
+    const allSources = computed(() => [...new Set([...masterData.value.sources, ...items.value.map(i => i.source).filter(Boolean)])]);
+
+    const filteredItems = computed(() => {
+      const list = items.value.filter(item => {
+        if (filterStatus.value === 'IN_STOCK' && isSold(item)) return false;
+        if (filterStatus.value === 'SOLD' && !isSold(item)) return false;
+        if (filterVersion.value && item.version !== filterVersion.value) return false;
+        if (filterPart.value && item.part !== filterPart.value) return false;
+        if (filterSource.value && item.source !== filterSource.value) return false;
+
+        const q = searchQuery.value.toLowerCase().trim();
+        if (q) {
+          const target = `${normalizeDate(item.purchaseDate)} ${normalizeDate(item.shipDate)} ${item.series} ${item.name} ${item.version} ${item.part} ${item.source} ${item.buyer}`.toLowerCase();
+          if (!target.includes(q)) return false;
+        }
+        return true;
+      });
+
+      if (!sortField.value) return list;
+
+      return [...list].sort((a, b) => {
+        const valA = normalizeDate(a[sortField.value]);
+        const valB = normalizeDate(b[sortField.value]);
+
+        // 空日期固定排在最下方
+        if (!valA && !valB) return 0;
+        if (!valA) return 1;
+        if (!valB) return -1;
+
+        return sortOrder.value === 'asc'
+          ? valA.localeCompare(valB)
+          : valB.localeCompare(valA);
+      });
+    });
+
+    const openAddModal = () => {
+      formModal.value = {
+        show: true,
+        isEdit: false,
+        data: {
+          id: 'ITEM-' + Date.now().toString().slice(-6),
+          purchaseDate: getTodayStr(),
+          series: '',
+          name: '',
+          version: masterData.value.versions[0] || '',
+          part: masterData.value.parts[0] || '',
+          source: masterData.value.sources[0] || '',
+          cost: 0,
+          listPrice: 0,
+          shipDate: '',
+          soldPrice: '',
+          actualReceived: '',
+          buyer: ''
+        }
+      };
+    };
+
+    const openEditModal = (item) => {
+      formModal.value = {
+        show: true,
+        isEdit: true,
+        data: {
+          ...item,
+          purchaseDate: normalizeDate(item.purchaseDate),
+          shipDate: normalizeDate(item.shipDate)
+        }
+      };
+    };
+
+    const syncReceivedIfEmpty = () => {
+      if (formModal.value.data.actualReceived === '' || formModal.value.data.actualReceived === null) {
+        formModal.value.data.actualReceived = formModal.value.data.soldPrice;
+      }
+    };
+
+    const clearShipInfo = () => {
+      formModal.value.data.shipDate = '';
+      formModal.value.data.soldPrice = '';
+      formModal.value.data.actualReceived = '';
+      formModal.value.data.buyer = '';
+    };
+
+    const saveForm = () => {
+      const payload = { ...formModal.value.data };
+      payload.purchaseDate = normalizeDate(payload.purchaseDate);
+      payload.shipDate = normalizeDate(payload.shipDate);
+      payload.series = (payload.series || '').trim();
+      payload.name = (payload.name || '').trim();
+
+      if (payload.series && payload.name) {
+        const exists = masterData.value.catalog.some(c => c.series.toLowerCase() === payload.series.toLowerCase());
+        if (!exists) masterData.value.catalog.unshift({ series: payload.series, name: payload.name });
+      }
+
+      if (formModal.value.isEdit) {
+        const idx = items.value.findIndex(i => i.id === payload.id);
+        if (idx !== -1) items.value[idx] = payload;
+      } else {
+        items.value.unshift(payload);
+      }
+      formModal.value.show = false;
+    };
+
+    const openSellModal = (item) => {
+      sellModal.value = {
+        show: true,
+        item,
+        shipDate: getTodayStr(),
+        soldPrice: item.listPrice || 0,
+        actualReceived: item.listPrice || 0,
+        buyer: ''
+      };
+    };
+
+    const submitQuickSell = () => {
+      const target = items.value.find(i => i.id === sellModal.value.item.id);
+      if (target) {
+        target.shipDate = normalizeDate(sellModal.value.shipDate);
+        target.soldPrice = sellModal.value.soldPrice;
+        target.actualReceived = sellModal.value.actualReceived;
+        target.buyer = sellModal.value.buyer;
+      }
+      sellModal.value.show = false;
+    };
+
+    const deleteItem = (id) => {
+      if (confirm('確定要刪除此筆紀錄嗎？')) items.value = items.value.filter(i => i.id !== id);
+    };
+
+    const parseAndImportTSV = () => {
+      const lines = pasteRawText.value.split(/\r?\n/).filter(line => line.trim() !== '');
+      if (lines.length === 0) return;
+
+      let addedCount = 0;
+      lines.forEach((line, idx) => {
+        const cols = line.split('\t').map(c => c.trim());
+        if (cols[1] === '系列' && cols[2] === '品項') return;
+
+        const isOldFormat = cols[5] !== '' && !isNaN(Number(cols[5]));
+        if (cols[1] || cols[2]) {
+          if (isOldFormat) {
+            const hasSpacer = cols.length >= 12 || (cols[7] === '' && cols.length >= 9);
+            const offset = hasSpacer ? 8 : 7;
+            items.value.unshift({
+              id: `IMP-${Date.now().toString().slice(-5)}-${idx}`,
+              purchaseDate: normalizeDate(cols[0]),
+              series: cols[1] || '',
+              name: cols[2] || '',
+              version: cols[3] || '',
+              part: cols[4] || '',
+              source: '',
+              cost: Number(cols[5]) || 0,
+              listPrice: Number(cols[6]) || 0,
+              shipDate: normalizeDate(cols[offset]),
+              soldPrice: cols[offset + 1] !== undefined && cols[offset + 1] !== '' ? Number(cols[offset + 1]) : '',
+              actualReceived: cols[offset + 2] !== undefined && cols[offset + 2] !== '' ? Number(cols[offset + 2]) : '',
+              buyer: cols[offset + 3] || ''
+            });
+          } else {
+            const hasSpacer = cols.length >= 13 || (cols[8] === '' && cols.length >= 10);
+            const offset = hasSpacer ? 9 : 8;
+            items.value.unshift({
+              id: `IMP-${Date.now().toString().slice(-5)}-${idx}`,
+              purchaseDate: normalizeDate(cols[0]),
+              series: cols[1] || '',
+              name: cols[2] || '',
+              version: cols[3] || '',
+              part: cols[4] || '',
+              source: cols[5] || '',
+              cost: Number(cols[6]) || 0,
+              listPrice: Number(cols[7]) || 0,
+              shipDate: normalizeDate(cols[offset]),
+              soldPrice: cols[offset + 1] !== undefined && cols[offset + 1] !== '' ? Number(cols[offset + 1]) : '',
+              actualReceived: cols[offset + 2] !== undefined && cols[offset + 2] !== '' ? Number(cols[offset + 2]) : '',
+              buyer: cols[offset + 3] || ''
+            });
+          }
+          addedCount++;
+        }
+      });
+
+      alert(`成功匯入 ${addedCount} 筆資料！`);
+      pasteRawText.value = '';
+      showImportModal.value = false;
+    };
+
+    const exportTSV = async () => {
+      const header = ['進貨日期', '系列', '品項', '版本', '部位', '來源', '進價', '標價', '', '出貨日期', '售價', '實收', '買家'].join('\t');
+      const rows = items.value.map(i => [
+        normalizeDate(i.purchaseDate), i.series, i.name, i.version, i.part, i.source || '', i.cost, i.listPrice,
+        '',
+        normalizeDate(i.shipDate), i.soldPrice, i.actualReceived, i.buyer
+      ].join('\t'));
+
+      const tsvContent = [header, ...rows].join('\n');
+      try {
+        await navigator.clipboard.writeText(tsvContent);
+        alert('已複製為新版試算表格式！可直接至試算表按 Ctrl+V 貼上。');
+      } catch (e) {
+        downloadFile('\uFEFF' + tsvContent, `inventory_${getTodayStr().replace(/\//g, '')}.tsv`, 'text/tab-separated-values;charset=utf-8;');
+      }
+    };
+
+    const syncStatus = computed(() => {
+      const map = {
+        local: { text: '本地模式', color: 'bg-slate-700 text-slate-300' },
+        syncing: { text: '驗證同步中...', color: 'bg-amber-500/20 text-amber-300' },
+        synced: { text: '雲端已同步', color: 'bg-emerald-500/20 text-emerald-300' },
+        error: { text: '驗證/連線失敗', color: 'bg-rose-500/20 text-rose-300' }
+      };
+      return map[syncState.value];
+    });
+
+    const downloadFile = (content, filename, mime) => {
+      const blob = new Blob([content], { type: mime });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      a.click();
+    };
+
+    const exportConfigJSON = () => downloadFile(JSON.stringify(masterData.value, null, 2), 'config.json', 'application/json');
+    const exportFullJSON = () => downloadFile(JSON.stringify({ items: cleanItemsList(items.value), masterData: masterData.value }, null, 2), `ims_backup_${getTodayStr().replace(/\//g, '')}.json`, 'application/json');
+
+    const importFullJSON = (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        try {
+          const parsed = JSON.parse(ev.target.result);
+          if (parsed.items) items.value = cleanItemsList(parsed.items);
+          if (parsed.masterData) masterData.value = parsed.masterData;
+          alert('備份還原成功！');
+        } catch (err) {
+          alert('JSON 格式錯誤');
+        }
+      };
+      reader.readAsText(file);
+    };
+
+    const resetDemo = () => {
+      if (confirm('確定恢復為預設範例資料？')) initDefaultItems();
+    };
+
+    const formatNum = (n) => Number(n || 0).toLocaleString('zh-TW');
+
+    return {
+      isAuthenticated, loginPasswordInput, isLoggingIn, loginError, showEndpointInput, hasSavedEndpoint,
+      handleLogin, enterOfflineDemo, logout,
+      activeTab, mobileMenuOpen, showPassword, masterData, items,
+      searchQuery, filterStatus, filterVersion, filterPart, filterSource,
+      sortField, sortOrder, sortPreset, toggleDateSort,
+      newPair, catalogSearch, filteredCatalog, newOptionText,
+      showImportModal, pasteRawText, apiConfig, syncState, syncStatus, syncErrorMsg, lastSyncTime,
+      formModal, sellModal, kpi, allVersions, allParts, allSources, filteredItems,
+      normalizeDate, pullFromCloud, syncToCloud, onSeriesInput, onNameInput,
+      addCatalogPair, removeCatalogPair, addOption, removeOption,
+      isSold, calcProfit, openAddModal, openEditModal, syncReceivedIfEmpty,
+      clearShipInfo, saveForm, openSellModal, submitQuickSell, deleteItem,
+      parseAndImportTSV, exportTSV, exportConfigJSON, exportFullJSON, importFullJSON, resetDemo, formatNum
+    };
+  }
+}).mount('#app');
+</script>
+</body>
+</html>
